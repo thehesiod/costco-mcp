@@ -1,6 +1,6 @@
 [project]
 name = "costco-mcp-server"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP server that gives Claude access to Costco warehouse receipts and online orders — multi-account, direct GraphQL via Azure AD B2C refresh tokens"
 readme = "README.md"
 license = "MIT"

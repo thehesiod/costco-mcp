@@ -119,3 +119,5 @@ Override the debugger port with `COSTCO_AUTH_PORT`.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+mcp-name: io.github.thehesiod/costco
