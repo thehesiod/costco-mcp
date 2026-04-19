@@ -6,6 +6,16 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 Available on the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.thehesiod/costco`.
 
+## Disclaimer
+
+> **This project is not affiliated with, endorsed by, or sponsored by Costco Wholesale Corporation.** "Costco" and all related names, logos, and trademarks are the property of their respective owners.
+>
+> This server communicates with Costco's **undocumented internal APIs** — endpoints that are not published, not guaranteed to be stable, and may change or be blocked at any time without notice. Use of those APIs may violate Costco's Terms of Service; you are responsible for reviewing the ToS and deciding whether your use is acceptable.
+>
+> **Use at your own risk.** The authors and contributors accept no responsibility for any consequences of using this software, including but not limited to: account suspension or termination, data loss or corruption, incorrect receipt/order information, failed purchases, financial discrepancies, API rate-limit strikes, IP blocks, or any other direct or indirect damages. No warranty is provided — see [LICENSE](LICENSE) for the full MIT no-warranty clause.
+>
+> If Costco publishes an official API, this project should be considered deprecated in favor of that.
+
 ## Features
 
 ### Warehouse
