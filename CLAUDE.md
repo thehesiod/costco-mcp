@@ -99,6 +99,43 @@ uv run costco-mcp-server --save-token personal <REFRESH_TOKEN>
 
 Tests are not checked in. For local smoke tests, use the default account and hit a known date range. Rate-limit is modest; Costco doesn't seem to throttle aggressively for read-only receipt/order queries.
 
+## Release Process
+
+Publishing is automated via `.github/workflows/publish.yml`. Uses **PyPI Trusted Publishers** (OIDC) — no API token stored anywhere.
+
+### One-time setup (pypi.org)
+
+Before the first release, add a "pending" trusted publisher on pypi.org:
+
+1. Log into [pypi.org](https://pypi.org) as the account that will own the project.
+2. Go to [Manage → Publishing → Add a new pending publisher](https://pypi.org/manage/account/publishing/).
+3. Fill in:
+   - **PyPI Project Name**: `costco-mcp-server`
+   - **Owner**: `thehesiod`
+   - **Repository name**: `costco-mcp`
+   - **Workflow name**: `publish.yml`
+   - **Environment name**: *(leave blank, or set e.g. `release` if you want a manual-approval gate)*
+4. Save. The publisher activates on the first successful tag push that runs `publish.yml`.
+
+### Cutting a release
+
+1. Bump the version in **both** `pyproject.toml` and `server.json` (the workflow fails if they don't match — both the top-level `version` and `packages[0].version` in `server.json`).
+2. Commit: `chore: bump to vX.Y.Z`.
+3. Tag + push:
+   ```bash
+   git tag vX.Y.Z
+   git push origin main --tags
+   ```
+4. The workflow:
+   - Verifies versions match the tag
+   - Builds wheel + sdist with `uv build`
+   - Publishes to PyPI via OIDC (`id-token: write`)
+   - Creates a GitHub Release with auto-generated notes and the built artifacts
+
+### MCP Registry (deferred)
+
+`server.json` is in place for [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io) publication. Not yet wired into CI — after the first PyPI release is verified working, add a second job that runs `mcp-publisher publish` using GitHub OIDC (namespace `io.github.thehesiod/*` is auto-authorized for the thehesiod GitHub account).
+
 ## Open Improvement Areas
 
 - **Refresh token auto-rotate**: Azure can issue new refresh tokens alongside new access tokens (when `offline_access` scope is present). Currently we never update the stored refresh token. If it drifts/rotates, our saved copy goes stale before 90 days.
