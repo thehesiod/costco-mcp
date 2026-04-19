@@ -1,57 +1,56 @@
-# costco-mcp
+# Costco MCP Server
 
-Model Context Protocol server for Costco warehouse receipts and online orders, with multi-account support.
+[![MCP Registry](https://img.shields.io/badge/MCP-Registry-blue)](https://registry.modelcontextprotocol.io) [![PyPI](https://img.shields.io/pypi/v/costco-mcp-server)](https://pypi.org/project/costco-mcp-server/)
 
-Talks directly to Costco's internal GraphQL API using an OAuth2 refresh token extracted from a browser session. No scraping, no headless browser at runtime — the authenticated call pattern is pure HTTP via [httpx](https://www.python-httpx.org/).
+An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that gives Claude access to [Costco](https://www.costco.com) warehouse receipts and online orders. Talks directly to Costco's internal GraphQL API using OAuth2 refresh tokens extracted from a browser session — no scraping, no runtime headless browser. **Multi-account** (e.g. `personal`, `spouse`) with per-account token storage.
 
-## Tools
+Available on the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.thehesiod/costco`.
 
-| Tool | Purpose |
-|-|-|
-| `check_auth_status` | Report token freshness and account list |
-| `save_refresh_token` | Register/update a refresh token for an account (manual path) |
-| `list_warehouse_receipts` | Warehouse transactions for a date range |
-| `get_receipt_detail` | Line items for a specific receipt barcode |
-| `list_online_orders` | Online orders for a date range |
-| `get_all_receipt_details` | Bulk fetch of receipts with detail |
-| `lookup_products` | Product info by item number (for a warehouse) |
+## Features
 
-Refresh tokens live in `~/.costco-mcp/accounts/<name>/auth.json` and are valid for ~90 days. Bearer tokens are minted transparently on each API call.
+### Warehouse
+- **`list_warehouse_receipts`** — In-store receipts for a date range (barcode, warehouse, total)
+- **`get_receipt_detail`** — Full itemized receipt by barcode (products, quantities, prices, coupons, department codes)
+- **`get_all_receipt_details`** — Bulk fetch every receipt's full detail for a date range
 
-## Install
+### Online Orders
+- **`list_online_orders`** — Costco.com orders for a date range (order number, status, items, totals)
 
-Requires Python 3.12+ and [`uv`](https://docs.astral.sh/uv/).
+### Products
+- **`lookup_products`** — Resolve item numbers to full product names + departments. Uses a local SQLite cache (`~/.costco-mcp/products.db`) so repeated lookups are free.
+
+### Authentication
+- **`check_auth_status`** — Report token freshness and list configured accounts
+- **`save_refresh_token`** — Register or update an account's refresh token
+
+## Setup
+
+### Install in Claude Code
 
 ```bash
-git clone https://github.com/thehesiod/costco-mcp ~/costco-mcp-server
+claude mcp add --transport stdio costco -- \
+    uvx --from "costco-mcp-server @ git+https://github.com/thehesiod/costco-mcp" costco-mcp-server
 ```
 
-Register with Claude Code:
+Once [published to PyPI](https://pypi.org/project/costco-mcp-server/), the above simplifies to:
 
 ```bash
-claude mcp add costco -- \
-    uv run --python 3.13 \
-    --with-editable ~/costco-mcp-server \
-    python -u -m costco_mcp_server.server
+claude mcp add --transport stdio costco -- uvx costco-mcp-server
 ```
 
-Or, if you've `uv pip install ~/costco-mcp-server` globally, `claude mcp add costco -- costco-mcp-server` works.
+### Authentication
 
-## Authentication
+Costco doesn't expose a public OAuth app, so refresh tokens are extracted from your browser's Azure AD B2C session storage. Refresh tokens are valid for ~90 days; bearer tokens are minted transparently on each API call.
 
-Costco doesn't expose a public OAuth app, so refresh tokens are extracted from your browser's Azure AD B2C session storage. Two flows — semi-automated is recommended.
-
-### Semi-automated (recommended)
-
-Uses a dedicated Chrome profile + [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) so Claude can extract and register the token for you. After first setup, each re-auth is "launch the browser, ask Claude to refresh."
+**Semi-automated flow (recommended).** Uses a dedicated Chrome profile + [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) so Claude extracts and registers the token for you. After first setup, each re-auth is "launch the browser, ask Claude to refresh."
 
 1. **Launch the auth browser** (cross-platform console script):
 
    ```bash
-   costco-auth-browser
+   uvx --from "costco-mcp-server @ git+https://github.com/thehesiod/costco-mcp" costco-auth-browser
    ```
 
-   This starts Chrome on port `9223` with a persistent profile at `~/.costco-mcp/chrome-profile/`.
+   Chrome starts on port 9223 with a persistent profile at `~/.costco-mcp/chrome-profile/`.
 
 2. **Register a chrome-devtools-mcp instance** pointed at that port (one time):
 
@@ -65,33 +64,35 @@ Uses a dedicated Chrome profile + [chrome-devtools-mcp](https://github.com/Chrom
 
    > Extract my Costco refresh token and save it for account "personal".
 
-   Claude will read the `msal.*.refreshtoken` entry from localStorage via `chrome-devtools-mcp`, then call `save_refresh_token`.
+   Claude reads the `msal.*.refreshtoken` entry from localStorage via `chrome-devtools-mcp` and calls `save_refresh_token`.
 
-### Manual fallback
+**Manual fallback.** If you'd rather not wire up a second MCP: log into costco.com, open DevTools → Application → Local Storage → `https://www.costco.com`, find the key containing `refreshtoken`, copy the `secret` field from its JSON value, then:
 
-If you don't want to wire up a second MCP:
+```bash
+uvx --from "costco-mcp-server @ git+https://github.com/thehesiod/costco-mcp" \
+    costco-mcp-server --save-token personal <REFRESH_TOKEN>
+```
 
-1. Log into [costco.com](https://www.costco.com) in any browser.
-2. Open DevTools → Application → Local Storage → `https://www.costco.com`.
-3. Find the key containing `refreshtoken` (format: `msal.<tenant>.<client>-<scope>-refreshtoken`).
-4. Copy the `secret` field from its JSON value.
-5. Call the `save_refresh_token` MCP tool with that string, or run the CLI:
+## Multi-Account
 
-   ```bash
-   costco-mcp-server --save-token personal <REFRESH_TOKEN>
-   ```
+Every tool takes an optional `account` argument (e.g. `"personal"`, `"spouse"`). Omitting it uses the default account (first registered, or most recently set). Account data is isolated per name under `~/.costco-mcp/accounts/<name>/`.
 
-## Multi-account
+## How It Works
 
-Every tool takes an optional `account` argument (e.g. `"personal"`, `"spouse"`). Omitting it uses the default account (first registered, or whichever `set_default_account` most recently set).
+The server uses `httpx[http2]` to hit Costco's internal GraphQL endpoints directly:
 
-Account data is isolated per name under `~/.costco-mcp/accounts/<name>/`.
+- **`ecom-api.costco.com/ebusiness/order/v1/orders/graphql`** — warehouse receipts + online orders
+- **`ecom-api.costco.com/ebusiness/product/v1/products/graphql`** — product lookups
 
-## Platform notes
+Authentication uses Azure AD B2C (`signin.costco.com`). The public client IDs baked into `auth.py` (tenant, policy, MSAL/WCS client IDs) ship in Costco's own browser bundle — they are not secrets. No credentials (username/password) are handled by this server.
+
+See [CLAUDE.md](CLAUDE.md) for architecture details and development notes.
+
+## Platform Notes
 
 Fully cross-platform (macOS, Linux, Windows). No shell scripts — all entry points are Python console scripts.
 
-The semi-automated flow requires Chrome or Chromium installed at a standard location. `costco-auth-browser` searches:
+The semi-automated auth flow requires Chrome or Chromium installed at a standard location. `costco-auth-browser` searches:
 
 - **macOS**: `/Applications/Google Chrome.app/...`
 - **Windows**: `%ProgramFiles%`, `%ProgramFiles(x86)%`, `%LocalAppData%` under `Google\Chrome\Application\chrome.exe`
@@ -99,12 +100,12 @@ The semi-automated flow requires Chrome or Chromium installed at a standard loca
 
 Override the debugger port with `COSTCO_AUTH_PORT`.
 
-## Security notes
+## Security Notes
 
-- Refresh tokens are stored plaintext in `~/.costco-mcp/`. File permissions are not hardened — rely on OS-level home directory permissions.
-- The Azure AD B2C client IDs baked into `auth.py` (tenant, policy, MSAL/WCS client IDs) are public SPA identifiers that ship in Costco's own browser bundle. They are **not** secrets.
-- No credentials (username/password) are handled by this server — authentication happens entirely in your browser's Costco login flow.
+- Refresh tokens are stored plaintext in `~/.costco-mcp/`. Rely on OS-level home directory permissions.
+- No credentials handled by this server. Authentication happens entirely in your browser's Costco login flow.
+- The Azure AD B2C client IDs in `auth.py` are public SPA identifiers that ship in Costco's browser bundle — not secrets.
 
 ## License
 
-MIT — see `LICENSE`.
+MIT — see [LICENSE](LICENSE).

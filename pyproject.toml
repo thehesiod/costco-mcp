@@ -1,22 +1,48 @@
-[build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "costco-mcp-server"
 version = "0.1.0"
-description = "MCP server for Costco warehouse receipts and online orders"
-license = { text = "MIT" }
+description = "MCP server that gives Claude access to Costco warehouse receipts and online orders — multi-account, direct GraphQL via Azure AD B2C refresh tokens"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
+keywords = [
+    "costco",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude",
+    "receipts",
+    "personal-finance",
+    "graphql",
+]
+authors = [{ name = "thehesiod" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+]
 dependencies = [
     "mcp[cli]>=1.0.0",
     "httpx[http2]>=0.27.0",
     "pyjwt>=2.8.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/thehesiod/costco-mcp"
+Repository = "https://github.com/thehesiod/costco-mcp"
+"Bug Tracker" = "https://github.com/thehesiod/costco-mcp/issues"
+
 [project.scripts]
 costco-mcp-server = "costco_mcp_server.server:main"
 costco-auth-browser = "costco_mcp_server.auth_browser:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/costco_mcp_server"]
