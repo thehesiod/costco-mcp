@@ -132,9 +132,11 @@ Before the first release, add a "pending" trusted publisher on pypi.org:
    - Publishes to PyPI via OIDC (`id-token: write`)
    - Creates a GitHub Release with auto-generated notes and the built artifacts
 
-### MCP Registry (deferred)
+### MCP Registry
 
-`server.json` is in place for [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io) publication. Not yet wired into CI — after the first PyPI release is verified working, add a second job that runs `mcp-publisher publish` using GitHub OIDC (namespace `io.github.thehesiod/*` is auto-authorized for the thehesiod GitHub account).
+Publishing to [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io) is wired into the same workflow — the `registry-publish` job runs after `pypi-publish` and uses `mcp-publisher login github-oidc` (no tokens, namespace `io.github.thehesiod/*` is auto-authorized).
+
+**Ownership proof:** the PyPI package README must contain the literal line `mcp-name: io.github.thehesiod/costco` (see the bottom of `README.md`). The registry's publisher validates this by fetching the published PyPI artifact and looking for that string. Removing the line will break future registry publishes.
 
 ## Open Improvement Areas
 
