@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "costco-mcp-server"
+version = "0.1.0"
+description = "MCP server for Costco warehouse receipts and online orders"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "httpx[http2]>=0.27.0",
+    "pyjwt>=2.8.0",
+]
+
+[project.scripts]
+costco-mcp-server = "costco_mcp_server.server:main"
+costco-auth-browser = "costco_mcp_server.auth_browser:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
