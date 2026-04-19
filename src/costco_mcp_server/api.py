@@ -4,9 +4,14 @@ import logging
 import uuid
 from typing import Any
 
-import httpx
+from curl_cffi import requests as curl_requests
 
 from costco_mcp_server.auth import CostcoAuth, WCS_CLIENT_ID
+from costco_mcp_server.product_cache import get_cached_names, store_names
+
+# Must match the TLS fingerprint used in auth.py — Akamai Bot Manager
+# rejects requests whose JA3/JA4 doesn't match a recognized browser build.
+_IMPERSONATE = "chrome131"
 
 logger = logging.getLogger(__name__)
 
@@ -206,17 +211,14 @@ class CostcoAPI:
 
     def _post(self, query: str, variables: dict[str, Any]) -> dict:
         """Execute a GraphQL query, retrying once on auth failure."""
-        import json as _json
-        body = _json.dumps({"query": query, "variables": variables})
-
         for attempt in range(2):
-            with httpx.Client(http2=True) as client:
-                resp = client.post(
-                    GRAPHQL_ENDPOINT,
-                    content=body,
-                    headers=self._headers(),
-                    timeout=30,
-                )
+            resp = curl_requests.post(
+                GRAPHQL_ENDPOINT,
+                json={"query": query, "variables": variables},
+                headers=self._headers(),
+                impersonate=_IMPERSONATE,
+                timeout=30,
+            )
             if resp.status_code == 401 and attempt == 0:
                 logger.info("Got 401, forcing token refresh...")
                 self._auth._id_token = None  # force refresh
@@ -318,9 +320,6 @@ class CostcoAPI:
         Returns:
             Dict mapping item number -> short description
         """
-        import json as _json
-        from costco_mcp_server.product_cache import get_cached_names, store_names
-
         # Check cache first (skip empty cached values)
         cached = {k: v for k, v in get_cached_names(item_numbers).items() if v}
         uncached = [n for n in item_numbers if n not in cached]
@@ -335,23 +334,20 @@ class CostcoAPI:
         api_results: dict[str, str] = {}
         for i in range(0, len(uncached), 20):
             batch = uncached[i:i + 20]
-            body = _json.dumps({
-                "query": QUERY_PRODUCTS,
-                "variables": {
-                    "itemNumbers": batch,
-                    "clientId": WCS_CLIENT_ID,
-                    "locale": ["en-US"],
-                    "warehouseNumber": warehouse_number,
-                },
-            })
+            variables = {
+                "itemNumbers": batch,
+                "clientId": WCS_CLIENT_ID,
+                "locale": ["en-US"],
+                "warehouseNumber": warehouse_number,
+            }
             for attempt in range(2):
-                with httpx.Client(http2=True) as client:
-                    resp = client.post(
-                        PRODUCT_GRAPHQL_ENDPOINT,
-                        content=body,
-                        headers=self._headers(),
-                        timeout=30,
-                    )
+                resp = curl_requests.post(
+                    PRODUCT_GRAPHQL_ENDPOINT,
+                    json={"query": QUERY_PRODUCTS, "variables": variables},
+                    headers=self._headers(),
+                    impersonate=_IMPERSONATE,
+                    timeout=30,
+                )
                 if resp.status_code == 401 and attempt == 0:
                     self._auth._id_token = None
                     continue

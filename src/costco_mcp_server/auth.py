@@ -5,8 +5,13 @@ import logging
 import time
 from pathlib import Path
 
-import httpx
 import jwt
+from curl_cffi import requests as curl_requests
+
+# Chrome TLS impersonation is required because Costco's Akamai Bot Manager
+# drops connections with non-browser JA3/JA4 fingerprints. Python's stdlib
+# ssl (used by httpx and requests) gets silently timed out at the edge.
+_IMPERSONATE = "chrome131"
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +95,13 @@ def _refresh_tokens(refresh_token: str) -> dict:
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
     }
-    with httpx.Client(http2=True) as client:
-        resp = client.post(TOKEN_ENDPOINT, data=data, headers=_BROWSER_HEADERS, timeout=30)
+    resp = curl_requests.post(
+        TOKEN_ENDPOINT,
+        data=data,
+        headers=_BROWSER_HEADERS,
+        impersonate=_IMPERSONATE,
+        timeout=30,
+    )
     resp.raise_for_status()
     return resp.json()
 
