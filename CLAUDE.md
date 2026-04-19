@@ -120,10 +120,10 @@ Before the first release, add a "pending" trusted publisher on pypi.org:
 ### Cutting a release
 
 1. Bump the version in **both** `pyproject.toml` and `server.json` (the workflow fails if they don't match — both the top-level `version` and `packages[0].version` in `server.json`).
-2. Commit: `chore: bump to vX.Y.Z`.
-3. Tag + push:
+2. Commit: `chore: bump to X.Y.Z`.
+3. Tag + push (tags are bare semver — no `v` prefix):
    ```bash
-   git tag vX.Y.Z
+   git tag X.Y.Z
    git push origin main --tags
    ```
 4. The workflow:
