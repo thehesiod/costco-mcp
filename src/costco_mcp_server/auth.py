@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Azure AD B2C static configuration for Costco
 TENANT_ID = "e0714dd4-784d-46d6-a278-3e29553483eb"
-POLICY_NAME = "b2c_1a_sso_wcs_signup_signin_201"
+POLICY_NAME = "b2c_1a_sso_wcs_signup_signin_209"
 TOKEN_ENDPOINT = f"https://signin.costco.com/{TENANT_ID}/{POLICY_NAME}/oauth2/v2.0/token"
 
 # Client IDs
