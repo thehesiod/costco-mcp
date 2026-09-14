@@ -2,14 +2,15 @@
 
 ## Architecture
 
-MCP server that talks directly to Costco's internal GraphQL API using OAuth2 refresh tokens extracted from a browser session. No scraping, no headless browser at runtime — all API calls are pure HTTP via `httpx[http2]`. Runs as stdio transport.
+MCP server that talks directly to Costco's internal GraphQL API using OAuth2 refresh tokens extracted from a browser session. No scraping, no headless browser at runtime — all API calls are pure HTTP via `curl_cffi` with Chrome TLS impersonation. Runs as stdio transport.
 
 ```
 src/costco_mcp_server/
   server.py         — MCP tool definitions (FastMCP)
   api.py            — CostcoAPI: GraphQL client, receipt/order/product queries
   auth.py           — CostcoAuth: per-account refresh token persistence + bearer minting
-  auth_browser.py   — costco-auth-browser console script (launches Chrome with remote debugging)
+  auth_browser.py   — costco-auth-browser console script (launches Chrome with dedicated profile)
+  extract.py        — Browser localStorage MSAL refresh-token extraction and verification
   product_cache.py  — SQLite cache for product names + department codes
 ```
 
@@ -32,10 +33,12 @@ src/costco_mcp_server/
 
 ### Refresh token extraction
 
-Two paths:
+Three paths:
 
-1. **Manual**: user opens Costco in their browser, reads `msal.*.refreshtoken` from localStorage (DevTools → Application tab), copies the `secret` field, calls `save_refresh_token` or `costco-mcp-server --save-token <name> <token>`.
-2. **Semi-automated** (recommended): `costco-auth-browser` launches Chrome with remote debugging on port 9223 and a persistent profile. A separate `chrome-devtools-mcp` instance (pointed at that port) lets Claude read localStorage and call `save_refresh_token` automatically.
+0. **Automatic (recommended)**: `extract_refresh_token` MCP tool or `costco-mcp-server --extract-token [--account <name>]`. Reads Chrome/Edge/Brave/Chromium localStorage (`Local Storage/leveldb`), parses the MSAL refresh token, verifies it against Azure AD B2C, and saves it. Prefers `~/.costco-mcp/chrome-profile` first, then scans standard browser profiles by mtime.
+1. **Dedicated browser login**: if not logged in to an everyday browser, `costco-auth-browser` launches Chrome with a dedicated profile (`~/.costco-mcp/chrome-profile`). Log into costco.com, then run `costco-mcp-server --extract-token`.
+2. **Manual fallback**: user opens Costco in their browser, reads `msal.*.refreshtoken` from localStorage (DevTools → Application tab), copies the `secret` field, calls `save_refresh_token` or `costco-mcp-server --save-token <name> <token>`.
+*(Note: chrome-devtools-mcp on port 9223 is maintained as legacy fallback for CDP-based extraction).*
 
 The refresh token is stored as Azure MSAL's base64-like secret, not a JWT. `auth.py` doesn't parse it — just POSTs it to the token endpoint.
 
@@ -81,11 +84,17 @@ Both accept common variants but the above match what the web UI sends.
 # Run the MCP server
 uv run costco-mcp-server
 
+# Extract refresh token automatically from local browser
+uv run costco-mcp-server --extract-token
+
 # Launch auth browser
 uv run costco-auth-browser
 
 # One-shot token save (useful after manual extraction)
 uv run costco-mcp-server --save-token personal <REFRESH_TOKEN>
+
+# Run unit test suite
+uv run pytest
 ```
 
 ### Adding a tool
@@ -95,9 +104,9 @@ uv run costco-mcp-server --save-token personal <REFRESH_TOKEN>
 3. Add the `@mcp.tool()` wrapper in `server.py`. Always accept an optional `account: str = ""` parameter.
 4. Formatter/stringifier at the tool boundary — don't leak raw GraphQL envelopes to Claude.
 
-### Testing against a live account
+### Testing
 
-Tests are not checked in. For local smoke tests, use the default account and hit a known date range. Rate-limit is modest; Costco doesn't seem to throttle aggressively for read-only receipt/order queries.
+Unit tests are in `tests/` and run offline via `uv run pytest`. For local smoke tests against a live account, use the default account and hit a known date range. Rate-limit is modest; Costco doesn't seem to throttle aggressively for read-only receipt/order queries.
 
 ## Release Process
 
@@ -142,4 +151,4 @@ Publishing to [registry.modelcontextprotocol.io](https://registry.modelcontextpr
 
 - **Refresh token auto-rotate**: Azure can issue new refresh tokens alongside new access tokens (when `offline_access` scope is present). Currently we never update the stored refresh token. If it drifts/rotates, our saved copy goes stale before 90 days.
 - **Product cache warm-up**: `lookup_products` fires one GraphQL call per cache miss. A bulk-fetch-and-cache flow would help first-time setups with large receipt histories.
-- **Error classification**: All non-200 responses currently bubble up as generic httpx errors. Classifying into "expired token" / "rate limited" / "bad query" would let tools return clearer messages.
+- **Error classification**: All non-200 responses currently bubble up as generic curl_cffi errors. Classifying into "expired token" / "rate limited" / "bad query" would let tools return clearer messages.
