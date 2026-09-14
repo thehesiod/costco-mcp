@@ -1,4 +1,4 @@
-"""Launch Chrome with remote debugging so chrome-devtools-mcp can extract a Costco refresh token.
+"""Launch Chrome with a dedicated profile to log into Costco for token extraction.
 
 Usage: `costco-auth-browser` (console script). Cross-platform: macOS, Linux, Windows.
 """
@@ -52,9 +52,9 @@ def main() -> int:
     print(f"Launching {chrome}")
     print(f"  --remote-debugging-port={port}")
     print(f"  --user-data-dir={PROFILE_DIR}")
-    print()
-    print("Log into costco.com in the browser window, then ask Claude to refresh your token.")
-    print(f"(chrome-devtools-mcp should be registered against the debugger on port {port}.)")
+    print("Log into costco.com in the browser window, then run:")
+    print("  costco-mcp-server --extract-token")
+    print("(Or call the 'extract_refresh_token' MCP tool in Claude.)")
     print()
 
     return subprocess.call([

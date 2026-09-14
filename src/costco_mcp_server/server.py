@@ -1,5 +1,6 @@
 """Costco MCP Server - warehouse receipts and online orders, multi-account."""
 
+import argparse
 import json
 import logging
 import sys
@@ -9,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 
 from costco_mcp_server.auth import CostcoAuth, list_accounts, get_default_account
 from costco_mcp_server.api import CostcoAPI
+from costco_mcp_server.extract import extract_and_save
 
 # Must log to stderr to avoid corrupting MCP stdio transport
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
@@ -44,6 +46,9 @@ def _default_date_range_iso() -> tuple[str, str]:
 def check_auth_status(account: str = "") -> str:
     """Check if authenticated with Costco. Shows token status and expiry.
 
+    If unauthenticated or expired, use extract_refresh_token to extract credentials
+    from your local browser, or save_refresh_token to save manually.
+
     Args:
         account: Account name (optional, uses default if empty). Use list_accounts to see all.
     """
@@ -55,8 +60,50 @@ def check_auth_status(account: str = "") -> str:
 
 
 @mcp.tool()
+def extract_refresh_token(
+    account: str = "",
+    browser: str = "auto",
+    profile: str = "",
+) -> str:
+    """Extract a Costco refresh token from a local Chrome/Edge/Brave profile
+    (localStorage MSAL cache) and save it. Log into costco.com in the browser
+    first. Prefers ~/.costco-mcp/chrome-profile if present.
+
+    Args:
+        account: Account name to save as (optional; defaults to email prefix or default account).
+        browser: Browser to scan: "auto", "chrome", "edge", "brave", "chromium" (default "auto").
+        profile: Specific browser profile name or folder (e.g. "Default", "Profile 1", "Personal").
+    """
+    try:
+        res = extract_and_save(
+            account=account,
+            browser=browser,
+            profile=profile or None,
+            verify=True,
+            save=True,
+        )
+        # Clear cached API so it picks up new token
+        _apis.pop(res.account, None)
+        if account:
+            _apis.pop(account, None)
+        info = {
+            "account": res.account,
+            "email": res.email,
+            "source_profile": res.source_profile,
+            "verified": res.verified,
+            "all_accounts": list_accounts(),
+        }
+        return json.dumps(info, indent=2)
+    except Exception as exc:
+        return f"Extraction failed: {exc}"
+
+
+@mcp.tool()
 def save_refresh_token(refresh_token: str, account: str = "") -> str:
     """Save a refresh token obtained from a browser login session.
+
+    Consider using extract_refresh_token to extract credentials automatically
+    from your local browser instead of copying manually.
 
     Use this to add a new account or update an existing one.
     The refresh token is valid for 90 days.
@@ -205,31 +252,93 @@ def lookup_products(item_numbers: str, warehouse_number: str = "847", account: s
 
 
 def main():
-    if "--setup" in sys.argv:
+    parser = argparse.ArgumentParser(
+        description="Costco MCP Server - warehouse receipts and online orders",
+        add_help=False,
+    )
+    parser.add_argument("--help", "-h", action="store_true", help="Show help message")
+    parser.add_argument("--setup", action="store_true", help="Show setup instructions and configured accounts")
+    parser.add_argument(
+        "--save-token",
+        nargs=2,
+        metavar=("ACCOUNT", "TOKEN"),
+        help="Save a refresh token manually: costco-mcp-server --save-token <ACCOUNT> <TOKEN>",
+    )
+    parser.add_argument(
+        "--extract-token",
+        action="store_true",
+        help="Extract refresh token from browser localStorage: costco-mcp-server --extract-token",
+    )
+    parser.add_argument(
+        "--account",
+        default="",
+        help="Account name to save as (defaults to email prefix or default account)",
+    )
+    parser.add_argument(
+        "--browser",
+        default="auto",
+        choices=["auto", "chrome", "edge", "brave", "chromium"],
+        help="Browser to extract from (default: auto)",
+    )
+    parser.add_argument("--profile", default=None, help="Specific browser profile name or folder")
+    parser.add_argument("--no-verify", action="store_true", help="Skip token verification against Costco API")
+    parser.add_argument("--no-save", action="store_true", help="Extract and verify only, do not save token")
+    parser.add_argument("--print-token", action="store_true", help="Print refresh token to stdout")
+
+    args, _ = parser.parse_known_args()
+
+    if args.help:
+        parser.print_help()
+        return
+
+    if args.setup:
         print("Costco MCP Server - Multi-Account Setup")
         print(f"Accounts: {list_accounts() or '(none)'}")
         print(f"Default: {get_default_account() or '(none)'}")
         print()
-        print("To add an account:")
+        print("To add an account automatically (recommended):")
+        print("  costco-mcp-server --extract-token [--account <NAME>]")
+        print()
+        print("To add an account manually:")
         print("  costco-mcp-server --save-token <ACCOUNT_NAME> <REFRESH_TOKEN>")
         print()
-        print("To get a refresh token:")
+        print("To get a refresh token manually:")
         print("  1. Log into costco.com in a browser")
-        print("  2. DevTools > Application > Local Storage > signin.costco.com")
+        print("  2. DevTools > Application > Local Storage > https://www.costco.com (or signin.costco.com)")
         print("  3. Find the key containing 'refreshtoken', copy the 'secret' value")
         return
 
-    if "--save-token" in sys.argv:
-        idx = sys.argv.index("--save-token")
-        if idx + 2 >= len(sys.argv):
-            print("Usage: costco-mcp-server --save-token <ACCOUNT_NAME> <REFRESH_TOKEN>", file=sys.stderr)
-            sys.exit(1)
-        name = sys.argv[idx + 1]
-        token = sys.argv[idx + 2]
+    if args.save_token:
+        name, token = args.save_token
         auth = CostcoAuth(name)
         auth.save_refresh_token(token)
         print(f"Token saved for account '{name}'")
         print(f"Accounts: {list_accounts()}")
+        return
+
+    if args.extract_token:
+        try:
+            res = extract_and_save(
+                account=args.account,
+                browser=args.browser,
+                profile=args.profile,
+                verify=not args.no_verify,
+                save=not args.no_save,
+            )
+            print("Extraction successful:")
+            print(f"  Account: {res.account}")
+            if res.email:
+                print(f"  Email: {res.email}")
+            print(f"  Source profile: {res.source_profile}")
+            print(f"  Verified: {res.verified}")
+            if not args.no_save:
+                print(f"  Accounts: {list_accounts()}")
+            if args.print_token:
+                print("WARNING: Printing refresh token to stdout. Keep this secret!", file=sys.stderr)
+                print(res._token)
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     mcp.run(transport="stdio")
