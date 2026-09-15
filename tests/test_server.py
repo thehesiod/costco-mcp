@@ -19,8 +19,10 @@ def test_extract_refresh_token_mcp_tool():
 
     _apis["shopper"] = MagicMock()
     _apis["other"] = MagicMock()
+    _apis["personal"] = MagicMock()
 
     with patch("costco_mcp_server.server.extract_and_save", return_value=fake_res), \
+         patch("costco_mcp_server.server.get_default_account", return_value="personal"), \
          patch("costco_mcp_server.server.list_accounts", return_value=["shopper", "other"]):
         res_str = extract_refresh_token(account="shopper", browser="chrome", profile="")
 
@@ -35,8 +37,9 @@ def test_extract_refresh_token_mcp_tool():
         # Secret MUST NOT leak into the output
         assert secret_token not in res_str
 
-        # _apis["shopper"] must be evicted
+        # Saved account and previous default must be evicted
         assert "shopper" not in _apis
+        assert "personal" not in _apis
         assert "other" in _apis
 
 

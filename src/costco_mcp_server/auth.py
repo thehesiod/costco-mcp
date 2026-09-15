@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Azure AD B2C static configuration for Costco
 TENANT_ID = "e0714dd4-784d-46d6-a278-3e29553483eb"
-POLICY_NAME = "b2c_1a_sso_wcs_signup_signin_209"
+POLICY_NAME = "b2c_1a_sso_wcs_signup_signin_201"
 
 
 def _token_endpoint(policy_name: str | None = None) -> str:
@@ -217,7 +217,8 @@ class CostcoAuth:
         if not self._refresh_token:
             raise RuntimeError(
                 f"Account '{self._account}' not authenticated. "
-                f"Use save_refresh_token to add credentials."
+                f"Use extract_refresh_token or costco-mcp-server --extract-token "
+                f"to add credentials, or save_refresh_token to paste a token manually."
             )
 
         if self._id_token and not _is_token_expired(self._id_token):

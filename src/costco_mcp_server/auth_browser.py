@@ -50,11 +50,13 @@ def main() -> int:
         return 1
 
     print(f"Launching {chrome}")
-    print(f"  --remote-debugging-port={port}")
     print(f"  --user-data-dir={PROFILE_DIR}")
+    print()
     print("Log into costco.com in the browser window, then run:")
     print("  costco-mcp-server --extract-token")
     print("(Or call the 'extract_refresh_token' MCP tool in Claude.)")
+    print()
+    print(f"(Optional CDP fallback: --remote-debugging-port={port} for chrome-devtools-mcp.)")
     print()
 
     return subprocess.call([

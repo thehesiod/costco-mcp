@@ -70,10 +70,11 @@ def extract_refresh_token(
     first. Prefers ~/.costco-mcp/chrome-profile if present.
 
     Args:
-        account: Account name to save as (optional; defaults to email prefix or default account).
+        account: Account name to save as (optional; defaults to the configured default, then email prefix).
         browser: Browser to scan: "auto", "chrome", "edge", "brave", "chromium" (default "auto").
         profile: Specific browser profile name or folder (e.g. "Default", "Profile 1", "Personal").
     """
+    previous_default = get_default_account()
     try:
         res = extract_and_save(
             account=account,
@@ -82,8 +83,9 @@ def extract_refresh_token(
             verify=True,
             save=True,
         )
-        # Clear cached API so it picks up new token
         _apis.pop(res.account, None)
+        if previous_default:
+            _apis.pop(previous_default, None)
         if account:
             _apis.pop(account, None)
         info = {
@@ -272,7 +274,7 @@ def main():
     parser.add_argument(
         "--account",
         default="",
-        help="Account name to save as (defaults to email prefix or default account)",
+        help="Account name to save as (defaults to the configured default, then email prefix)",
     )
     parser.add_argument(
         "--browser",

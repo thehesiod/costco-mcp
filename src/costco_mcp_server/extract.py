@@ -82,8 +82,36 @@ def _copy_leveldb_unlocked(src: Path) -> Path:
     """Copy a LevelDB directory ignoring LOCK so an open browser doesn't block reading."""
     tmp = Path(tempfile.mkdtemp(prefix="costco-leveldb-"))
     dest = tmp / "leveldb"
-    shutil.copytree(src, dest, ignore=lambda *_: ["LOCK"])
+    try:
+        shutil.copytree(src, dest, ignore=lambda *_: ["LOCK"])
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
     return dest
+
+
+def _email_local_part(email: str | None) -> str | None:
+    if not email:
+        return None
+    return email.split("@")[0] if "@" in email else email
+
+
+def _account_matches_candidate(account: str, cand: TokenCandidate) -> bool:
+    local = _email_local_part(cand.email)
+    return bool(local) and local.lower() == account.strip().lower()
+
+
+def _apply_token_response(cand: TokenCandidate, token_resp: dict | None) -> None:
+    """Copy minted id_token / rotated refresh token / policy off a verify response."""
+    if not token_resp:
+        return
+    if "id_token" in token_resp:
+        cand.id_token = token_resp["id_token"]
+    if "_policy_name" in token_resp:
+        cand.policy_name = token_resp["_policy_name"]
+    # Azure often rotates the RT in this body; persist that, not the browser secret.
+    if token_resp.get("refresh_token"):
+        cand.secret = token_resp["refresh_token"]
 
 
 def _is_leveldb_dir(p: Path) -> bool:
@@ -146,6 +174,9 @@ def find_chromium_profiles(
     Order:
       1. Dedicated profile (~/.costco-mcp/chrome-profile) first
       2. Regular profiles sorted by LevelDB directory mtime (newest first)
+
+    When `profile` is set, the dedicated profile is included only if its
+    folder name matches (so `--profile "Profile 2"` does not still read it).
     """
     valid_browsers = {"auto", "chrome", "edge", "brave", "chromium"}
     browser_lower = browser.lower().strip()
@@ -157,12 +188,16 @@ def find_chromium_profiles(
     dedicated_paths: list[Path] = []
     # Dedicated profile is searched when browser is auto, chrome, or chromium
     if browser_lower in {"auto", "chrome", "chromium"}:
-        for sub in (
-            DEDICATED_PROFILE_DIR / "Default" / "Local Storage" / "leveldb",
-            DEDICATED_PROFILE_DIR / "Local Storage" / "leveldb",
-        ):
-            if _is_leveldb_dir(sub) and sub not in dedicated_paths:
-                dedicated_paths.append(sub)
+        dedicated_candidates = [
+            (DEDICATED_PROFILE_DIR / "Default" / "Local Storage" / "leveldb", "Default"),
+            (DEDICATED_PROFILE_DIR / "Local Storage" / "leveldb", DEDICATED_PROFILE_DIR.name),
+        ]
+        for sub, folder in dedicated_candidates:
+            if not _is_leveldb_dir(sub) or sub in dedicated_paths:
+                continue
+            if profile and folder.lower() != profile.lower():
+                continue
+            dedicated_paths.append(sub)
 
     bases_by_browser = _get_chromium_user_data_dirs(browser_lower)
     candidate_bases: list[Path] = []
@@ -325,8 +360,8 @@ def _parse_msal_refresh_tokens(records: Iterable[Any]) -> list[TokenCandidate]:
         c.email = home_account_emails.get(c.home_account_id)
         c.id_token = home_account_idtokens.get(c.home_account_id)
 
-    # Deduplicate: if multiple records share the same secret or home_account_id,
-    # keep the one with the highest sequence number
+    # Deduplicate: newest seq wins per (home_account_id, secret);
+    # two secrets for one account are both kept.
     best_by_key: dict[tuple[str, str], TokenCandidate] = {}
     for c in sorted(filtered, key=lambda x: x.leveldb_seq_number):
         key = (c.home_account_id, c.secret)
@@ -384,7 +419,7 @@ def extract_and_save(
     """Extract a Costco refresh token from Chromium browser profiles and save it.
 
     Parameters:
-        account: Account name to save as (defaults to email prefix or default account).
+        account: Account name to save as (defaults to the configured default, then email prefix).
         browser: 'auto', 'chrome', 'edge', 'brave', or 'chromium'.
         profile: Specific browser profile name or folder (e.g. 'Default', 'Personal').
         verify: Verify candidate against Azure AD B2C endpoint before saving.
@@ -402,11 +437,16 @@ def extract_and_save(
         )
 
     errors: list[str] = []
-    fallback_candidate: tuple[TokenCandidate, Path] | None = None
-    selected_candidate: TokenCandidate | None = None
-    selected_profile: Path | None = None
+    requested = account.strip() if account else ""
+    identity_verified: tuple[TokenCandidate, Path] | None = None
+    identity_fallback: tuple[TokenCandidate, Path] | None = None
+    other_verified: tuple[TokenCandidate, Path] | None = None
+    other_fallback: tuple[TokenCandidate, Path] | None = None
+    saw_identity = False
 
     for profile_path in profile_paths:
+        if identity_verified is not None:
+            break
         tmp_dir: Path | None = None
         try:
             copied_leveldb = _copy_leveldb_unlocked(profile_path)
@@ -415,39 +455,45 @@ def extract_and_save(
             with LocalStorageReader(str(copied_leveldb)) as reader:
                 candidates = _parse_msal_refresh_tokens(reader.records())
 
+            logger.info(
+                "Profile %s: found refreshtoken key: %s",
+                profile_path,
+                "yes" if candidates else "no",
+            )
             if not candidates:
                 errors.append(f"Profile {profile_path}: no Costco refresh tokens found")
                 continue
 
-            # Prioritize candidate matching requested account name if specified
-            if account:
-                candidates.sort(
-                    key=lambda c: bool(
-                        c.email and c.email.split("@")[0].lower() == account.lower()
-                    ),
-                    reverse=True,
-                )
-
-            found_match = False
+            # If --account matches an email local-part, only accept that identity
             for cand in candidates:
+                is_identity = bool(requested) and _account_matches_candidate(
+                    requested, cand
+                )
+                if is_identity:
+                    saw_identity = True
+
                 if verify:
                     status, token_resp = verify_candidate(
                         cand.secret, policy_name=cand.policy_name
                     )
                     if status is True:
                         cand.verified = True
-                        if token_resp and "id_token" in token_resp:
-                            cand.id_token = token_resp["id_token"]
-                        if token_resp and "_policy_name" in token_resp:
-                            cand.policy_name = token_resp["_policy_name"]
-                        selected_candidate = cand
-                        selected_profile = profile_path
-                        found_match = True
-                        break
+                        _apply_token_response(cand, token_resp)
+                        pair = (cand, profile_path)
+                        if is_identity:
+                            identity_verified = pair
+                            break
+                        if other_verified is None:
+                            other_verified = pair
+                            if not requested:
+                                break
                     elif status is None:
-                        if fallback_candidate is None:
-                            cand.verified = False
-                            fallback_candidate = (cand, profile_path)
+                        cand.verified = False
+                        pair = (cand, profile_path)
+                        if is_identity and identity_fallback is None:
+                            identity_fallback = pair
+                        elif other_fallback is None:
+                            other_fallback = pair
                         errors.append(
                             f"Profile {profile_path}: token verification inconclusive (network/timeout)"
                         )
@@ -455,12 +501,18 @@ def extract_and_save(
                         errors.append(f"Profile {profile_path}: token expired (HTTP 400)")
                 else:
                     cand.verified = False
-                    selected_candidate = cand
-                    selected_profile = profile_path
-                    found_match = True
-                    break
+                    pair = (cand, profile_path)
+                    if is_identity:
+                        identity_verified = pair
+                        break
+                    if other_verified is None:
+                        other_verified = pair
+                        if not requested:
+                            break
 
-            if found_match:
+            if identity_verified is not None:
+                break
+            if not requested and other_verified is not None:
                 break
         except Exception as exc:
             errors.append(f"Profile {profile_path}: {exc}")
@@ -468,8 +520,20 @@ def extract_and_save(
             if tmp_dir is not None:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    if selected_candidate is None and fallback_candidate is not None:
-        selected_candidate, selected_profile = fallback_candidate
+    # Prefer a verified identity match; do not save a different Costco login
+    # under --account when that email was present but expired.
+    selected_candidate: TokenCandidate | None = None
+    selected_profile: Path | None = None
+    if identity_verified is not None:
+        selected_candidate, selected_profile = identity_verified
+    elif identity_fallback is not None:
+        selected_candidate, selected_profile = identity_fallback
+    elif saw_identity:
+        selected_candidate = None
+    elif other_verified is not None:
+        selected_candidate, selected_profile = other_verified
+    elif other_fallback is not None:
+        selected_candidate, selected_profile = other_fallback
 
     if selected_candidate is None or selected_profile is None:
         raise RuntimeError(
@@ -478,13 +542,15 @@ def extract_and_save(
             + "\n".join(errors)
         )
 
-    # Determine target account name
-    target_account = account.strip() if account else ""
-    if not target_account:
-        if selected_candidate.email:
-            target_account = selected_candidate.email.split("@")[0]
-        else:
-            target_account = get_default_account() or "default"
+    # Determine target account name: explicit --account, else configured default, else email prefix
+    if requested:
+        target_account = requested
+    else:
+        target_account = (
+            get_default_account()
+            or _email_local_part(selected_candidate.email)
+            or "default"
+        )
 
     if save:
         auth = CostcoAuth(target_account)
@@ -493,8 +559,6 @@ def extract_and_save(
             id_token=selected_candidate.id_token,
             policy_name=selected_candidate.policy_name,
         )
-        if selected_candidate.verified:
-            auth.get_bearer_token()
 
     return ExtractResult(
         account=target_account,

@@ -2,7 +2,6 @@
 
 import json
 import os
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -113,6 +112,7 @@ def test_parse_msal_refresh_tokens():
     assert cand.email == test_email
     assert cand.id_token == dummy_jwt
     assert cand.leveldb_seq_number == 10
+    assert cand.policy_name is None
 
 
 def test_parse_msal_deduplication_and_sequence():
@@ -185,10 +185,11 @@ def test_find_chromium_profiles(tmp_path):
         assert profiles[1] == profile2_leveldb
         assert profiles[2] == profile1_leveldb
 
-        # 2. Filter by profile name matching gaia_name
+        # 2. Filter by profile name matching gaia_name; dedicated is excluded
         filtered = find_chromium_profiles("chrome", profile="Personal Work")
         assert profile2_leveldb in filtered
         assert profile1_leveldb not in filtered
+        assert dedicated_leveldb not in filtered
 
         # 3. Invalid browser
         with pytest.raises(ValueError, match="Unsupported browser"):
@@ -242,7 +243,8 @@ def test_extract_and_save(tmp_path):
          patch("costco_mcp_server.extract._copy_leveldb_unlocked", return_value=fake_profile), \
          patch("costco_mcp_server.extract.LocalStorageReader") as mock_reader_cls, \
          patch("costco_mcp_server.extract._parse_msal_refresh_tokens", return_value=[fake_cand]), \
-         patch("costco_mcp_server.extract.verify_candidate", return_value=(True, {"id_token": "new-id-token"})), \
+         patch("costco_mcp_server.extract.verify_candidate", return_value=(True, {"id_token": "new-id-token", "refresh_token": "rotated-rt"})), \
+         patch("costco_mcp_server.extract.get_default_account", return_value=None), \
          patch("costco_mcp_server.extract.CostcoAuth", return_value=mock_auth):
 
         mock_reader = MagicMock()
@@ -269,13 +271,12 @@ def test_extract_and_save(tmp_path):
             "verified": True,
         }
 
-        # Verify CostcoAuth methods called
         mock_auth.save_refresh_token.assert_called_once_with(
-            "extracted-secret-token",
+            "rotated-rt",
             id_token="new-id-token",
             policy_name=None,
         )
-        mock_auth.get_bearer_token.assert_called_once()
+        mock_auth.get_bearer_token.assert_not_called()
 
 
 def test_copy_leveldb_unlocked(tmp_path):
@@ -294,3 +295,147 @@ def test_copy_leveldb_unlocked(tmp_path):
     finally:
         import shutil
         shutil.rmtree(dest.parent, ignore_errors=True)
+
+
+def test_parse_msal_policy_from_home_account_id():
+    home_id = "abc-b2c_1a_sso_wcs_signup_signin_209.tenant"
+    val = json.dumps({
+        "credentialType": "RefreshToken",
+        "homeAccountId": home_id,
+        "clientId": MSAL_CLIENT_ID,
+        "secret": "rt",
+    })
+    records = [
+        DummyRecord("https://www.costco.com", "refreshtoken", val),
+    ]
+    candidates = _parse_msal_refresh_tokens(records)
+    assert len(candidates) == 1
+    assert candidates[0].policy_name == "b2c_1a_sso_wcs_signup_signin_209"
+
+
+def test_copy_leveldb_unlocked_cleans_up_on_failure(tmp_path):
+    src = tmp_path / "leveldb"
+    src.mkdir()
+    (src / "CURRENT").write_text("x")
+
+    created: list[Path] = []
+    real_mkdtemp = __import__("tempfile").mkdtemp
+
+    def tracking_mkdtemp(*args, **kwargs):
+        p = real_mkdtemp(*args, **kwargs)
+        created.append(Path(p))
+        return p
+
+    with patch("costco_mcp_server.extract.tempfile.mkdtemp", side_effect=tracking_mkdtemp), \
+         patch("costco_mcp_server.extract.shutil.copytree", side_effect=OSError("disk full")):
+        with pytest.raises(OSError, match="disk full"):
+            _copy_leveldb_unlocked(src)
+
+    assert created
+    assert not created[0].exists()
+
+
+def _extract_env(tmp_path):
+    fake_profile = tmp_path / "chrome-profile" / "Default" / "Local Storage" / "leveldb"
+    fake_profile.mkdir(parents=True)
+    (fake_profile / "CURRENT").write_text("dummy")
+    mock_auth = MagicMock()
+    mock_reader = MagicMock()
+    mock_reader.__enter__.return_value = mock_reader
+    mock_reader.records.return_value = []
+    return fake_profile, mock_auth, mock_reader
+
+
+def test_extract_uses_configured_default_account(tmp_path):
+    fake_profile, mock_auth, mock_reader = _extract_env(tmp_path)
+    cand = TokenCandidate(
+        secret="rt",
+        client_id=MSAL_CLIENT_ID,
+        home_account_id="home",
+        email="shopper@domain.com",
+    )
+    with patch("costco_mcp_server.extract.find_chromium_profiles", return_value=[fake_profile]), \
+         patch("costco_mcp_server.extract._copy_leveldb_unlocked", return_value=fake_profile), \
+         patch("costco_mcp_server.extract.LocalStorageReader", return_value=mock_reader), \
+         patch("costco_mcp_server.extract._parse_msal_refresh_tokens", return_value=[cand]), \
+         patch("costco_mcp_server.extract.verify_candidate", return_value=(True, {"id_token": "id"})), \
+         patch("costco_mcp_server.extract.get_default_account", return_value="personal"), \
+         patch("costco_mcp_server.extract.CostcoAuth", return_value=mock_auth):
+        result = extract_and_save(account="", verify=True, save=True)
+        assert result.account == "personal"
+        mock_auth.save_refresh_token.assert_called_once()
+
+
+def test_extract_account_identity_does_not_save_other_login(tmp_path):
+    fake_profile, mock_auth, mock_reader = _extract_env(tmp_path)
+    jane = TokenCandidate(
+        secret="jane-rt",
+        client_id=MSAL_CLIENT_ID,
+        home_account_id="jane-home",
+        email="jane@domain.com",
+    )
+    john = TokenCandidate(
+        secret="john-rt",
+        client_id=MSAL_CLIENT_ID,
+        home_account_id="john-home",
+        email="john@domain.com",
+    )
+
+    def verify(secret, policy_name=None):
+        if secret == "jane-rt":
+            return False, None
+        return True, {"id_token": "john-id"}
+
+    with patch("costco_mcp_server.extract.find_chromium_profiles", return_value=[fake_profile]), \
+         patch("costco_mcp_server.extract._copy_leveldb_unlocked", return_value=fake_profile), \
+         patch("costco_mcp_server.extract.LocalStorageReader", return_value=mock_reader), \
+         patch("costco_mcp_server.extract._parse_msal_refresh_tokens", return_value=[jane, john]), \
+         patch("costco_mcp_server.extract.verify_candidate", side_effect=verify), \
+         patch("costco_mcp_server.extract.CostcoAuth", return_value=mock_auth):
+        with pytest.raises(RuntimeError, match="Failed to extract"):
+            extract_and_save(account="jane", verify=True, save=True)
+        mock_auth.save_refresh_token.assert_not_called()
+
+
+def test_extract_account_save_as_label(tmp_path):
+    fake_profile, mock_auth, mock_reader = _extract_env(tmp_path)
+    john = TokenCandidate(
+        secret="john-rt",
+        client_id=MSAL_CLIENT_ID,
+        home_account_id="john-home",
+        email="john@domain.com",
+    )
+    with patch("costco_mcp_server.extract.find_chromium_profiles", return_value=[fake_profile]), \
+         patch("costco_mcp_server.extract._copy_leveldb_unlocked", return_value=fake_profile), \
+         patch("costco_mcp_server.extract.LocalStorageReader", return_value=mock_reader), \
+         patch("costco_mcp_server.extract._parse_msal_refresh_tokens", return_value=[john]), \
+         patch("costco_mcp_server.extract.verify_candidate", return_value=(True, {"id_token": "id"})), \
+         patch("costco_mcp_server.extract.CostcoAuth", return_value=mock_auth):
+        result = extract_and_save(account="personal", verify=True, save=True)
+        assert result.account == "personal"
+        mock_auth.save_refresh_token.assert_called_once_with(
+            "john-rt",
+            id_token="id",
+            policy_name=None,
+        )
+
+
+def test_extract_network_none_fallback(tmp_path):
+    fake_profile, mock_auth, mock_reader = _extract_env(tmp_path)
+    cand = TokenCandidate(
+        secret="rt",
+        client_id=MSAL_CLIENT_ID,
+        home_account_id="home",
+        email="shopper@domain.com",
+    )
+    with patch("costco_mcp_server.extract.find_chromium_profiles", return_value=[fake_profile]), \
+         patch("costco_mcp_server.extract._copy_leveldb_unlocked", return_value=fake_profile), \
+         patch("costco_mcp_server.extract.LocalStorageReader", return_value=mock_reader), \
+         patch("costco_mcp_server.extract._parse_msal_refresh_tokens", return_value=[cand]), \
+         patch("costco_mcp_server.extract.verify_candidate", return_value=(None, None)), \
+         patch("costco_mcp_server.extract.get_default_account", return_value=None), \
+         patch("costco_mcp_server.extract.CostcoAuth", return_value=mock_auth):
+        result = extract_and_save(account="", verify=True, save=True)
+        assert result.verified is False
+        assert result.account == "shopper"
+        mock_auth.save_refresh_token.assert_called_once()
