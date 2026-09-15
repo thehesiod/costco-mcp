@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -18,7 +19,13 @@ logger = logging.getLogger(__name__)
 # Azure AD B2C static configuration for Costco
 TENANT_ID = "e0714dd4-784d-46d6-a278-3e29553483eb"
 POLICY_NAME = "b2c_1a_sso_wcs_signup_signin_201"
-TOKEN_ENDPOINT = f"https://signin.costco.com/{TENANT_ID}/{POLICY_NAME}/oauth2/v2.0/token"
+
+
+def _token_endpoint(policy_name: str | None = None) -> str:
+    return f"https://signin.costco.com/{TENANT_ID}/{policy_name or POLICY_NAME}/oauth2/v2.0/token"
+
+
+TOKEN_ENDPOINT = _token_endpoint()
 
 # Client IDs
 MSAL_CLIENT_ID = "a3a5186b-7c89-4b4c-93a8-dd604e930757"  # SPA / my-account app
@@ -88,7 +95,8 @@ def _is_token_expired(id_token: str, buffer_seconds: int = 120) -> bool:
         return True
 
 
-def _refresh_tokens(refresh_token: str) -> dict:
+def _refresh_tokens(refresh_token: str, policy_name: str | None = None) -> dict:
+    policy = policy_name or POLICY_NAME
     data = {
         "client_id": MSAL_CLIENT_ID,
         "scope": "openid profile offline_access",
@@ -96,14 +104,33 @@ def _refresh_tokens(refresh_token: str) -> dict:
         "refresh_token": refresh_token,
     }
     resp = curl_requests.post(
-        TOKEN_ENDPOINT,
+        _token_endpoint(policy),
         data=data,
         headers=_BROWSER_HEADERS,
         impersonate=_IMPERSONATE,
         timeout=30,
     )
+    if resp.status_code == 400:
+        match = re.search(r"Expected Value\s*:\s*([A-Za-z0-9_]+)", resp.text)
+        if match and match.group(1).lower() != policy.lower():
+            expected_policy = match.group(1).lower()
+            logger.info("Retrying token refresh with expected policy '%s'", expected_policy)
+            retry_resp = curl_requests.post(
+                _token_endpoint(expected_policy),
+                data=data,
+                headers=_BROWSER_HEADERS,
+                impersonate=_IMPERSONATE,
+                timeout=30,
+            )
+            retry_resp.raise_for_status()
+            res = retry_resp.json()
+            res["_policy_name"] = expected_policy
+            return res
+
     resp.raise_for_status()
-    return resp.json()
+    res = resp.json()
+    res["_policy_name"] = policy
+    return res
 
 
 def _migrate_legacy() -> None:
@@ -167,6 +194,7 @@ class CostcoAuth:
             self._account = account
         self._id_token: str | None = None
         self._refresh_token: str | None = None
+        self._policy_name: str | None = None
         self._load_from_disk()
 
     @property
@@ -178,6 +206,7 @@ class CostcoAuth:
         if auth:
             self._id_token = auth.get("id_token")
             self._refresh_token = auth.get("refresh_token")
+            self._policy_name = auth.get("policy_name")
             logger.info("Loaded auth for account '%s'", self._account)
 
     @property
@@ -188,30 +217,48 @@ class CostcoAuth:
         if not self._refresh_token:
             raise RuntimeError(
                 f"Account '{self._account}' not authenticated. "
-                f"Use save_refresh_token to add credentials."
+                f"Use extract_refresh_token or costco-mcp-server --extract-token "
+                f"to add credentials, or save_refresh_token to paste a token manually."
             )
 
         if self._id_token and not _is_token_expired(self._id_token):
             return self._id_token
 
         logger.info("Token expired for '%s', refreshing...", self._account)
-        result = _refresh_tokens(self._refresh_token)
+        result = _refresh_tokens(self._refresh_token, policy_name=self._policy_name)
 
         self._id_token = result["id_token"]
         if "refresh_token" in result:
             self._refresh_token = result["refresh_token"]
+        if "_policy_name" in result:
+            self._policy_name = result["_policy_name"]
 
-        _save_account_auth(self._account, {
+        auth_data = {
             "id_token": self._id_token,
             "refresh_token": self._refresh_token,
-        })
+        }
+        if self._policy_name:
+            auth_data["policy_name"] = self._policy_name
+        _save_account_auth(self._account, auth_data)
         logger.info("Tokens refreshed for '%s'", self._account)
         return self._id_token
 
-    def save_refresh_token(self, refresh_token: str) -> None:
+    def save_refresh_token(
+        self,
+        refresh_token: str,
+        id_token: str | None = None,
+        policy_name: str | None = None,
+    ) -> None:
         self._refresh_token = refresh_token
-        self._id_token = None
-        _save_account_auth(self._account, {"refresh_token": refresh_token})
+        self._id_token = id_token
+        if policy_name:
+            self._policy_name = policy_name
+        data: dict = {"refresh_token": refresh_token}
+        if id_token:
+            data["id_token"] = id_token
+        if self._policy_name:
+            data["policy_name"] = self._policy_name
+        _save_account_auth(self._account, data)
 
         # Register account in config
         config = _load_config()

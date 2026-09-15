@@ -29,6 +29,12 @@ dependencies = [
     "mcp[cli]>=1.0.0",
     "curl_cffi>=0.7.0",
     "pyjwt>=2.8.0",
+    "chromium-reader>=0.1.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
 ]
 
 [project.urls]

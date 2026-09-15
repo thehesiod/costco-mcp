@@ -31,7 +31,8 @@ Available on the [MCP Registry](https://registry.modelcontextprotocol.io) as `io
 
 ### Authentication
 - **`check_auth_status`** — Report token freshness and list configured accounts
-- **`save_refresh_token`** — Register or update an account's refresh token
+- **`extract_refresh_token`** — Automatically extract and save refresh token from local browser
+- **`save_refresh_token`** — Register or update an account's refresh token manually
 
 ## Setup
 
@@ -50,38 +51,43 @@ claude mcp add --transport stdio costco -- uvx costco-mcp-server
 
 ### Authentication
 
-Costco doesn't expose a public OAuth app, so refresh tokens are extracted from your browser's Azure AD B2C session storage. Refresh tokens are valid for ~90 days; bearer tokens are minted transparently on each API call.
+Costco authenticates via Azure AD B2C OAuth2 refresh tokens stored in browser `localStorage`. Run `costco-mcp-server --extract-token` (or ask Claude to call `extract_refresh_token`) once to copy the token from a local Chrome/Edge/Brave profile onto disk. After that, runtime auth is refresh-token → bearer — no browser scan on each request. Extracted tokens are saved to `~/.costco-mcp/` and remain valid for ~90 days.
 
-**Semi-automated flow (recommended).** Uses a dedicated Chrome profile + [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) so Claude extracts and registers the token for you. After first setup, each re-auth is "launch the browser, ask Claude to refresh."
+#### Automatic Extraction (Recommended)
 
-1. **Launch the auth browser** (cross-platform console script):
-
-   ```bash
-   uvx --from "costco-mcp-server @ git+https://github.com/thehesiod/costco-mcp" costco-auth-browser
-   ```
-
-   Chrome starts on port 9223 with a persistent profile at `~/.costco-mcp/chrome-profile/`.
-
-2. **Register a chrome-devtools-mcp instance** pointed at that port (one time):
-
-   ```bash
-   claude mcp add costco-browser -- npx -y chrome-devtools-mcp --browserUrl http://127.0.0.1:9223
-   ```
-
-3. **Log into costco.com** in the launched browser window (first time only — the profile persists).
-
-4. **Ask Claude** to refresh:
-
+1. **If you are already logged into costco.com in Chrome, Edge, or Brave:**
+   Ask Claude:
    > Extract my Costco refresh token and save it for account "personal".
 
-   Claude reads the `msal.*.refreshtoken` entry from localStorage via `chrome-devtools-mcp` and calls `save_refresh_token`.
+   Or run the CLI command directly:
+   ```bash
+   costco-mcp-server --extract-token [--account personal]
+   ```
 
-**Manual fallback.** If you'd rather not wire up a second MCP: log into costco.com, open DevTools → Application → Local Storage → `https://www.costco.com`, find the key containing `refreshtoken`, copy the `secret` field from its JSON value, then:
+2. **If not yet logged in or you prefer an isolated profile:**
+   Launch the dedicated auth browser:
+   ```bash
+   costco-auth-browser
+   ```
+   Log into costco.com in the opened window, navigate to your account/orders, then run:
+   ```bash
+   costco-mcp-server --extract-token
+   ```
+   (The dedicated profile `~/.costco-mcp/chrome-profile` is scanned first.)
 
-```bash
-uvx --from "costco-mcp-server @ git+https://github.com/thehesiod/costco-mcp" \
-    costco-mcp-server --save-token personal <REFRESH_TOKEN>
-```
+#### Manual Authentication (Fallback)
+
+If you prefer to extract tokens manually without automatic browser profile scanning:
+
+1. Log into costco.com in your browser.
+2. Open **DevTools** → **Application** → **Local Storage** → `https://www.costco.com` (or `signin.costco.com`).
+3. Locate the key containing `refreshtoken`, view the JSON value, and copy the `secret` field.
+4. Save the token to your account:
+   ```bash
+   costco-mcp-server --save-token personal <REFRESH_TOKEN>
+   ```
+
+*(Legacy note: You can also attach `chrome-devtools-mcp` to port 9223 while running `costco-auth-browser` if you need Claude to read a live page over CDP).*
 
 ## Multi-Account
 
@@ -89,7 +95,7 @@ Every tool takes an optional `account` argument (e.g. `"personal"`, `"spouse"`).
 
 ## How It Works
 
-The server uses `httpx[http2]` to hit Costco's internal GraphQL endpoints directly:
+The server uses `curl_cffi` (with Chrome TLS impersonation to satisfy Akamai Bot Manager) to hit Costco's internal GraphQL endpoints directly:
 
 - **`ecom-api.costco.com/ebusiness/order/v1/orders/graphql`** — warehouse receipts + online orders
 - **`ecom-api.costco.com/ebusiness/product/v1/products/graphql`** — product lookups
