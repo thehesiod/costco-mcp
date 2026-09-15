@@ -65,7 +65,7 @@ All tools return formatted strings (markdown or plain text). No FastMCP `Image`/
 
 Symptom: `get_bearer_token` raises with a 400 from the token endpoint. The error message from Azure is HTML, not JSON — check `_refresh_tokens` response body.
 
-Fix: re-run the extraction flow (either manual or `costco-auth-browser` + `chrome-devtools-mcp`). The stored `auth.json` for that account needs its `refresh_token` field replaced.
+Fix: log into costco.com if needed, then `costco-mcp-server --extract-token` (or the `extract_refresh_token` MCP tool). The stored `auth.json` for that account needs its `refresh_token` field replaced.
 
 ### `client-identifier` drift
 

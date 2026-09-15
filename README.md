@@ -51,7 +51,7 @@ claude mcp add --transport stdio costco -- uvx costco-mcp-server
 
 ### Authentication
 
-Costco authenticates via Azure AD B2C OAuth2 refresh tokens stored in browser `localStorage`. The server automatically extracts and verifies this token directly from your local Chrome, Edge, Brave, or Chromium profiles — no copy-pasting or runtime browser needed. Extracted tokens are saved to `~/.costco-mcp/` and remain valid for ~90 days, with bearer tokens minted transparently on each request.
+Costco authenticates via Azure AD B2C OAuth2 refresh tokens stored in browser `localStorage`. Run `costco-mcp-server --extract-token` (or ask Claude to call `extract_refresh_token`) once to copy the token from a local Chrome/Edge/Brave profile onto disk. After that, runtime auth is refresh-token → bearer — no browser scan on each request. Extracted tokens are saved to `~/.costco-mcp/` and remain valid for ~90 days.
 
 #### Automatic Extraction (Recommended)
 
