@@ -1,6 +1,6 @@
 [project]
 name = "costco-mcp-server"
-version = "0.1.2"
+version = "0.1.3"
 description = "MCP server that gives Claude access to Costco warehouse receipts and online orders — multi-account, direct GraphQL via Azure AD B2C refresh tokens"
 readme = "README.md"
 license = "MIT"
@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Office/Business :: Financial",
 ]
 dependencies = [
-    "mcp[cli]>=1.0.0",
+    "mcp[cli]>=2,<3",
     "curl_cffi>=0.7.0",
     "pyjwt>=2.8.0",
 ]

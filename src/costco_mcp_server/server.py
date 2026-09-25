@@ -5,7 +5,7 @@ import logging
 import sys
 from datetime import datetime, timedelta
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from costco_mcp_server.auth import CostcoAuth, list_accounts, get_default_account
 from costco_mcp_server.api import CostcoAPI
@@ -14,7 +14,7 @@ from costco_mcp_server.api import CostcoAPI
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("Costco MCP Server")
+mcp = MCPServer("Costco MCP Server")
 
 # Cache of API instances per account
 _apis: dict[str, CostcoAPI] = {}
