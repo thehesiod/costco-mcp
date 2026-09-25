@@ -6,7 +6,7 @@ MCP server that talks directly to Costco's internal GraphQL API using OAuth2 ref
 
 ```
 src/costco_mcp_server/
-  server.py         — MCP tool definitions (FastMCP)
+  server.py         — MCP tool definitions (MCPServer)
   api.py            — CostcoAPI: GraphQL client, receipt/order/product queries
   auth.py           — CostcoAuth: per-account refresh token persistence + bearer minting
   auth_browser.py   — costco-auth-browser console script (launches Chrome with remote debugging)
@@ -54,7 +54,7 @@ The refresh token is stored as Azure MSAL's base64-like secret, not a JWT. `auth
 
 ### Response format
 
-All tools return formatted strings (markdown or plain text). No FastMCP `Image`/structured-content returns — receipt data is tabular and fits text well.
+All tools return formatted strings (markdown or plain text). No MCPServer `Image`/structured-content returns — receipt data is tabular and fits text well.
 
 ## Known Gotchas
 
