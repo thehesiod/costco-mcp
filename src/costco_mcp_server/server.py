@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timedelta
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 
 from costco_mcp_server.auth import CostcoAuth, list_accounts, get_default_account
 from costco_mcp_server.api import CostcoAPI
@@ -262,7 +263,61 @@ def main():
         print(f"Accounts: {list_accounts()}")
         return
 
-    mcp.run(transport="stdio")
+    transport = os.environ.get("COSTCO_MCP_TRANSPORT", "stdio")
+    if transport == "stdio":
+        mcp.run(transport="stdio")
+    elif transport == "streamable-http":
+        _run_http()
+    else:
+        print(f"Unknown COSTCO_MCP_TRANSPORT {transport!r}: use stdio or streamable-http", file=sys.stderr)
+        sys.exit(2)
+
+
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _csv_env(name: str) -> list[str]:
+    return [v.strip() for v in os.environ.get(name, "").split(",") if v.strip()]
+
+
+def http_security_settings() -> TransportSecuritySettings:
+    """Host/Origin (DNS-rebinding) protection: loopback plus any reverse-proxy names.
+
+    Set COSTCO_MCP_ALLOWED_HOSTS / COSTCO_MCP_ALLOWED_ORIGINS (comma-separated)
+    when a reverse proxy forwards its own Host header, e.g. "mcp.example.com".
+    """
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*", *_csv_env("COSTCO_MCP_ALLOWED_HOSTS")],
+        allowed_origins=[
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "http://[::1]:*",
+            *_csv_env("COSTCO_MCP_ALLOWED_ORIGINS"),
+        ],
+    )
+
+
+def _run_http() -> None:
+    """Serve streamable HTTP on loopback only (opt-in via COSTCO_MCP_TRANSPORT).
+
+    The server holds account credentials and has no auth of its own, so it
+    refuses to bind anything but loopback; put a reverse proxy in front for
+    remote access. The save_refresh_token tool is dropped in this mode so
+    tokens never pass through a shared server; use `--save-token` instead.
+    """
+    host = os.environ.get("COSTCO_MCP_HOST", "127.0.0.1")
+    if host not in _LOOPBACK_HOSTS:
+        print(f"Refusing to bind {host!r}: HTTP mode is loopback-only.", file=sys.stderr)
+        sys.exit(2)
+    port = int(os.environ.get("COSTCO_MCP_PORT", "8000"))
+    mcp.remove_tool("save_refresh_token")
+    mcp.run(
+        transport="streamable-http",
+        host=host,
+        port=port,
+        transport_security=http_security_settings(),
+    )
 
 
 if __name__ == "__main__":

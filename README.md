@@ -85,6 +85,20 @@ uvx --from "costco-mcp-server @ git+https://github.com/thehesiod/costco-mcp" \
 
 Don't put the token on the command line: it ends up in shell history and `ps`.
 
+## HTTP mode (optional)
+
+stdio is the default. To run one shared copy behind a reverse proxy, set:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `COSTCO_MCP_TRANSPORT` | `stdio` | `streamable-http` to serve HTTP at `/mcp` |
+| `COSTCO_MCP_HOST` | `127.0.0.1` | Loopback only; anything else is refused |
+| `COSTCO_MCP_PORT` | `8000` | Port |
+| `COSTCO_MCP_ALLOWED_HOSTS` | — | Extra `Host` values to accept, comma-separated (your proxy's hostname) |
+| `COSTCO_MCP_ALLOWED_ORIGINS` | — | Extra `Origin` values to accept, comma-separated |
+
+Host/Origin (DNS-rebinding) protection is always on. The server has no auth of its own, so the proxy must restrict who can reach it. `save_refresh_token` is not exposed over HTTP; add tokens with `--save-token` on the host.
+
 ## Multi-Account
 
 Every tool takes an optional `account` argument (e.g. `"personal"`, `"spouse"`). Omitting it uses the default account (first registered, or most recently set). Account data is isolated per name under `~/.costco-mcp/accounts/<name>/`.
