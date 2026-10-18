@@ -99,6 +99,10 @@ stdio is the default. To run one shared copy behind a reverse proxy, set:
 
 Host/Origin (DNS-rebinding) protection is always on. The server has no auth of its own, so the proxy must restrict who can reach it. `save_refresh_token` is not exposed over HTTP; add tokens with `--save-token` on the host.
 
+## Token from the environment (optional)
+
+Set `COSTCO_REFRESH_TOKEN` (and optionally `COSTCO_ACCOUNT`, default `default`) to supply the token from a secrets manager such as sops or 1Password instead of `~/.costco-mcp`. That account becomes the default, its token is never written to disk, and refreshed tokens are kept in memory only; the server re-reads the env on restart. When the token expires, update the secret and restart.
+
 ## Multi-Account
 
 Every tool takes an optional `account` argument (e.g. `"personal"`, `"spouse"`). Omitting it uses the default account (first registered, or most recently set). Account data is isolated per name under `~/.costco-mcp/accounts/<name>/`.

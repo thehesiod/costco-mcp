@@ -182,24 +182,41 @@ def _migrate_legacy() -> None:
     logger.info("Migrated legacy auth to account '%s'", account_name)
 
 
+ENV_TOKEN_VAR = "COSTCO_REFRESH_TOKEN"
+ENV_ACCOUNT_VAR = "COSTCO_ACCOUNT"
+
+
+def env_account() -> str | None:
+    """Name of the account whose token comes from $COSTCO_REFRESH_TOKEN, if set.
+
+    Lets a secrets manager (sops, 1Password, systemd credentials) supply the
+    token so it never touches ~/.costco-mcp. $COSTCO_ACCOUNT names it
+    (default "default").
+    """
+    if not os.environ.get(ENV_TOKEN_VAR, "").strip():
+        return None
+    return validate_account_name(os.environ.get(ENV_ACCOUNT_VAR, "").strip() or "default")
+
+
 def list_accounts() -> list[str]:
-    """Return list of configured account names."""
+    """Return list of configured account names (the env account first, if any)."""
     _migrate_legacy()
     config = _load_config()
-    return config.get("accounts", [])
+    accounts = config.get("accounts", [])
+    env = env_account()
+    return [env, *(a for a in accounts if a != env)] if env else accounts
 
 
 def get_default_account() -> str | None:
-    """Return the default account name."""
+    """Return the default account name (the env account wins when set)."""
     _migrate_legacy()
-    config = _load_config()
-    return config.get("default")
+    return env_account() or _load_config().get("default")
 
 
 class CostcoAuth:
     """Manages Costco authentication tokens for a specific account."""
 
-    def __init__(self, account: str | None = None) -> None:
+    def __init__(self, account: str | None = None, *, use_env: bool = True) -> None:
         _migrate_legacy()
         if account is None:
             account = get_default_account()
@@ -210,7 +227,14 @@ class CostcoAuth:
             self._account = validate_account_name(account)
         self._id_token: str | None = None
         self._refresh_token: str | None = None
-        self._load_from_disk()
+        # Env-supplied tokens are never written to disk; refreshed tokens stay
+        # in memory and the process re-seeds from the env on restart.
+        self._from_env = use_env and self._account == env_account()
+        if self._from_env:
+            self._refresh_token = os.environ[ENV_TOKEN_VAR].strip()
+            logger.info("Using $%s for account '%s'", ENV_TOKEN_VAR, self._account)
+        else:
+            self._load_from_disk()
 
     @property
     def account(self) -> str:
@@ -231,27 +255,39 @@ class CostcoAuth:
         if not self._refresh_token:
             raise RuntimeError(
                 f"Account '{self._account}' not authenticated. "
-                f"Use save_refresh_token to add credentials."
+                f"Use save_refresh_token or set ${ENV_TOKEN_VAR} to add credentials."
             )
 
         if self._id_token and not _is_token_expired(self._id_token):
             return self._id_token
 
         logger.info("Token expired for '%s', refreshing...", self._account)
-        result = _refresh_tokens(self._refresh_token)
+        try:
+            result = _refresh_tokens(self._refresh_token)
+        except Exception as e:
+            where = f"${ENV_TOKEN_VAR}" if self._from_env else "save_refresh_token / --save-token"
+            raise RuntimeError(
+                f"Token refresh failed for '{self._account}' ({e}). The refresh token has "
+                f"likely expired; log into costco.com again and update it via {where}."
+            ) from e
 
         self._id_token = result["id_token"]
         if "refresh_token" in result:
             self._refresh_token = result["refresh_token"]
 
-        _save_account_auth(self._account, {
-            "id_token": self._id_token,
-            "refresh_token": self._refresh_token,
-        })
+        if not self._from_env:
+            _save_account_auth(self._account, {
+                "id_token": self._id_token,
+                "refresh_token": self._refresh_token,
+            })
         logger.info("Tokens refreshed for '%s'", self._account)
         return self._id_token
 
     def save_refresh_token(self, refresh_token: str) -> None:
+        if self._from_env:
+            raise RuntimeError(
+                f"Account '{self._account}' takes its token from ${ENV_TOKEN_VAR}; update it there."
+            )
         self._refresh_token = refresh_token
         self._id_token = None
         _save_account_auth(self._account, {"refresh_token": refresh_token})
@@ -270,7 +306,7 @@ class CostcoAuth:
     def check_status(self) -> dict:
         info: dict = {
             "account": self._account,
-            "auth_file": str(_account_auth_file(self._account)),
+            "token_source": f"${ENV_TOKEN_VAR}" if self._from_env else str(_account_auth_file(self._account)),
             "has_refresh_token": self.is_authenticated,
         }
         if self._id_token:

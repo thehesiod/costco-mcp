@@ -254,7 +254,7 @@ def main():
             print("No refresh token given.", file=sys.stderr)
             sys.exit(1)
         try:
-            auth = CostcoAuth(name)
+            auth = CostcoAuth(name, use_env=False)
         except ValueError as e:
             print(e, file=sys.stderr)
             sys.exit(1)
