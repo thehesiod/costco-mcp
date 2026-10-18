@@ -76,12 +76,14 @@ Costco doesn't expose a public OAuth app, so refresh tokens are extracted from y
 
    Claude reads the `msal.*.refreshtoken` entry from localStorage via `chrome-devtools-mcp` and calls `save_refresh_token`.
 
-**Manual fallback.** If you'd rather not wire up a second MCP: log into costco.com, open DevTools → Application → Local Storage → `https://www.costco.com`, find the key containing `refreshtoken`, copy the `secret` field from its JSON value, then:
+**Manual fallback.** If you'd rather not wire up a second MCP: log into costco.com, open DevTools → Application → Local Storage → `https://www.costco.com`, find the key containing `refreshtoken`, copy the `secret` field from its JSON value, then run this and paste it at the hidden prompt (or pipe it in, or set `COSTCO_REFRESH_TOKEN`):
 
 ```bash
 uvx --from "costco-mcp-server @ git+https://github.com/thehesiod/costco-mcp" \
-    costco-mcp-server --save-token personal <REFRESH_TOKEN>
+    costco-mcp-server --save-token personal
 ```
+
+Don't put the token on the command line: it ends up in shell history and `ps`.
 
 ## Multi-Account
 

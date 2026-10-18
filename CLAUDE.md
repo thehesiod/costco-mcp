@@ -34,7 +34,7 @@ src/costco_mcp_server/
 
 Two paths:
 
-1. **Manual**: user opens Costco in their browser, reads `msal.*.refreshtoken` from localStorage (DevTools → Application tab), copies the `secret` field, calls `save_refresh_token` or `costco-mcp-server --save-token <name> <token>`.
+1. **Manual**: user opens Costco in their browser, reads `msal.*.refreshtoken` from localStorage (DevTools → Application tab), copies the `secret` field, calls `save_refresh_token` or runs `costco-mcp-server --save-token <name>` (hidden prompt, stdin, or `$COSTCO_REFRESH_TOKEN`; a positional token still works but warns).
 2. **Semi-automated** (recommended): `costco-auth-browser` launches Chrome with remote debugging on port 9223 and a persistent profile. A separate `chrome-devtools-mcp` instance (pointed at that port) lets Claude read localStorage and call `save_refresh_token` automatically.
 
 The refresh token is stored as Azure MSAL's base64-like secret, not a JWT. `auth.py` doesn't parse it — just POSTs it to the token endpoint.
@@ -85,7 +85,7 @@ uv run costco-mcp-server
 uv run costco-auth-browser
 
 # One-shot token save (useful after manual extraction)
-uv run costco-mcp-server --save-token personal <REFRESH_TOKEN>
+uv run costco-mcp-server --save-token personal   # prompts for the token
 ```
 
 ### Adding a tool

@@ -1,7 +1,9 @@
 """Costco MCP Server - warehouse receipts and online orders, multi-account."""
 
+import getpass
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta
 
@@ -204,14 +206,35 @@ def lookup_products(item_numbers: str, warehouse_number: str = "847", account: s
     return json.dumps(result, indent=2)
 
 
+def _read_refresh_token(arg: str | None) -> str:
+    """Get the refresh token without leaving it in shell history or `ps`.
+
+    Order: positional argument (deprecated), $COSTCO_REFRESH_TOKEN, a hidden
+    prompt when stdin is a terminal, otherwise one line from stdin.
+    """
+    if arg:
+        print(
+            "Warning: a token on the command line is saved in shell history and visible "
+            "in `ps`. Omit it to be prompted, or pipe it in.",
+            file=sys.stderr,
+        )
+        return arg.strip()
+    if token := os.environ.get("COSTCO_REFRESH_TOKEN", "").strip():
+        return token
+    if sys.stdin.isatty():
+        return getpass.getpass("Refresh token (input hidden): ").strip()
+    return sys.stdin.readline().strip()
+
+
 def main():
     if "--setup" in sys.argv:
         print("Costco MCP Server - Multi-Account Setup")
         print(f"Accounts: {list_accounts() or '(none)'}")
         print(f"Default: {get_default_account() or '(none)'}")
         print()
-        print("To add an account:")
-        print("  costco-mcp-server --save-token <ACCOUNT_NAME> <REFRESH_TOKEN>")
+        print("To add an account (prompts for the token without echoing it):")
+        print("  costco-mcp-server --save-token <ACCOUNT_NAME>")
+        print("  (or pipe it in, or set COSTCO_REFRESH_TOKEN)")
         print()
         print("To get a refresh token:")
         print("  1. Log into costco.com in a browser")
@@ -221,12 +244,19 @@ def main():
 
     if "--save-token" in sys.argv:
         idx = sys.argv.index("--save-token")
-        if idx + 2 >= len(sys.argv):
-            print("Usage: costco-mcp-server --save-token <ACCOUNT_NAME> <REFRESH_TOKEN>", file=sys.stderr)
+        if idx + 1 >= len(sys.argv):
+            print("Usage: costco-mcp-server --save-token <ACCOUNT_NAME>", file=sys.stderr)
             sys.exit(1)
         name = sys.argv[idx + 1]
-        token = sys.argv[idx + 2]
-        auth = CostcoAuth(name)
+        token = _read_refresh_token(sys.argv[idx + 2] if idx + 2 < len(sys.argv) else None)
+        if not token:
+            print("No refresh token given.", file=sys.stderr)
+            sys.exit(1)
+        try:
+            auth = CostcoAuth(name)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
         auth.save_refresh_token(token)
         print(f"Token saved for account '{name}'")
         print(f"Accounts: {list_accounts()}")
