@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -85,8 +86,25 @@ def _save_config(config: dict) -> None:
     _write_private(CONFIG_FILE, json.dumps(config, indent=2))
 
 
+_ACCOUNT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def validate_account_name(account: str) -> str:
+    """Reject account names that could escape ACCOUNTS_DIR.
+
+    The name arrives as an MCP tool argument and becomes a directory name, so
+    "../x" or "/abs" would otherwise read or write files outside ~/.costco-mcp.
+    """
+    if not _ACCOUNT_NAME.fullmatch(account):
+        raise ValueError(
+            f"Invalid account name {account!r}: use 1-64 letters, digits, '.', '-' or '_', "
+            "starting with a letter or digit."
+        )
+    return account
+
+
 def _account_auth_file(account: str) -> Path:
-    return ACCOUNTS_DIR / account / "auth.json"
+    return ACCOUNTS_DIR / validate_account_name(account) / "auth.json"
 
 
 def _load_account_auth(account: str) -> dict | None:
@@ -150,8 +168,9 @@ def _migrate_legacy() -> None:
         try:
             payload = jwt.decode(id_token, options={"verify_signature": False})
             email = payload.get("email", "")
-            if email:
-                account_name = email.split("@")[0]
+            local_part = re.sub(r"[^A-Za-z0-9._-]", "_", email.split("@")[0])[:64]
+            if _ACCOUNT_NAME.fullmatch(local_part):
+                account_name = local_part
         except jwt.DecodeError:
             pass
 
@@ -188,7 +207,7 @@ class CostcoAuth:
             # No accounts configured at all
             self._account = "default"
         else:
-            self._account = account
+            self._account = validate_account_name(account)
         self._id_token: str | None = None
         self._refresh_token: str | None = None
         self._load_from_disk()
