@@ -46,3 +46,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/costco_mcp_server"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
