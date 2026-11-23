@@ -55,7 +55,7 @@ def check_auth_status(account: str = "") -> str:
 
 
 @mcp.tool()
-def save_refresh_token(refresh_token: str, account: str = "") -> str:
+def save_refresh_token(refresh_token: str, account: str = "", region: str = "us") -> str:
     """Save a refresh token obtained from a browser login session.
 
     Use this to add a new account or update an existing one.
@@ -65,13 +65,14 @@ def save_refresh_token(refresh_token: str, account: str = "") -> str:
         refresh_token: The OAuth2 refresh token from Costco's Azure AD B2C
         account: Account name (e.g. "personal", "spouse"). Creates the account if new.
                  If empty, uses default account.
+        region: Costco region ("us" for costco.com, "ca" for costco.ca). Defaults to "us".
     """
     name = account or get_default_account() or "default"
     auth = CostcoAuth(name)
-    auth.save_refresh_token(refresh_token)
+    auth.save_refresh_token(refresh_token, region=region)
     # Clear cached API so it picks up new token
     _apis.pop(name, None)
-    return f"Refresh token saved for account '{name}'. Accounts: {list_accounts()}"
+    return f"Refresh token saved for account '{name}' (region={auth.region}). Accounts: {list_accounts()}"
 
 
 @mcp.tool()
@@ -118,12 +119,12 @@ def get_receipt_detail(barcode: str, account: str = "") -> str:
 def list_online_orders(
     start_date: str = "",
     end_date: str = "",
-    warehouse_number: str = "847",
+    warehouse_number: str = "",
     page_number: int = 1,
     page_size: int = 25,
     account: str = "",
 ) -> str:
-    """List online Costco.com orders for a date range.
+    """List online Costco orders for a date range.
 
     Returns order summaries with order number, date, total, status,
     and line items with descriptions and shipping info.
@@ -131,7 +132,7 @@ def list_online_orders(
     Args:
         start_date: Start date as YYYY-M-DD (e.g. "2026-1-01"). Defaults to 90 days ago.
         end_date: End date as YYYY-M-DD (e.g. "2026-3-31"). Defaults to today.
-        warehouse_number: Warehouse number (default "847").
+        warehouse_number: Warehouse number (defaults to region default: "847" US, "894" CA).
         page_number: Page number for pagination (default 1).
         page_size: Results per page (default 25).
         account: Account name (optional, uses default).
@@ -189,14 +190,14 @@ def get_all_receipt_details(
 
 
 @mcp.tool()
-def lookup_products(item_numbers: str, warehouse_number: str = "847", account: str = "") -> str:
+def lookup_products(item_numbers: str, warehouse_number: str = "", account: str = "") -> str:
     """Look up full Costco product names by item numbers.
 
     Uses a shared local cache — only calls the API for uncached items.
 
     Args:
         item_numbers: Comma-separated item numbers (e.g. "70476,5887,1532925")
-        warehouse_number: Warehouse number (default "847")
+        warehouse_number: Warehouse number (defaults to region default: "847" US, "894" CA)
         account: Account name (optional, uses default).
     """
     nums = [n.strip() for n in item_numbers.split(",") if n.strip()]
@@ -222,13 +223,20 @@ def main():
     if "--save-token" in sys.argv:
         idx = sys.argv.index("--save-token")
         if idx + 2 >= len(sys.argv):
-            print("Usage: costco-mcp-server --save-token <ACCOUNT_NAME> <REFRESH_TOKEN>", file=sys.stderr)
+            print("Usage: costco-mcp-server --save-token <ACCOUNT_NAME> <REFRESH_TOKEN> [--region us|ca]", file=sys.stderr)
             sys.exit(1)
         name = sys.argv[idx + 1]
         token = sys.argv[idx + 2]
+        region = None
+        if "--region" in sys.argv:
+            r_idx = sys.argv.index("--region")
+            if r_idx + 1 >= len(sys.argv):
+                print("Usage: --region <us|ca>", file=sys.stderr)
+                sys.exit(1)
+            region = sys.argv[r_idx + 1]
         auth = CostcoAuth(name)
-        auth.save_refresh_token(token)
-        print(f"Token saved for account '{name}'")
+        auth.save_refresh_token(token, region=region)
+        print(f"Token saved for account '{name}' (region={auth.region})")
         print(f"Accounts: {list_accounts()}")
         return
 

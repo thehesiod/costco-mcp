@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -17,12 +18,37 @@ logger = logging.getLogger(__name__)
 
 # Azure AD B2C static configuration for Costco
 TENANT_ID = "e0714dd4-784d-46d6-a278-3e29553483eb"
-POLICY_NAME = "b2c_1a_sso_wcs_signup_signin_201"
-TOKEN_ENDPOINT = f"https://signin.costco.com/{TENANT_ID}/{POLICY_NAME}/oauth2/v2.0/token"
-
-# Client IDs
 MSAL_CLIENT_ID = "a3a5186b-7c89-4b4c-93a8-dd604e930757"  # SPA / my-account app
-WCS_CLIENT_ID = "4900eb1f-0c10-4bd9-99c3-c59e6c1ecebf"  # WebSphere Commerce
+
+REGION_CONFIG: dict[str, dict[str, str]] = {
+    "us": {
+        "base_url": "https://www.costco.com",
+        "wcs_client_id": "4900eb1f-0c10-4bd9-99c3-c59e6c1ecebf",
+        "policy_name": "b2c_1a_sso_wcs_signup_signin_201",
+        "warehouse_number": "847",
+        "accept_language": "en-US,en;q=0.9",
+    },
+    "ca": {
+        "base_url": "https://www.costco.ca",
+        "wcs_client_id": "e442e6e6-2602-4a39-937b-8b28b4457ed3",
+        "policy_name": "b2c_1a_sso_wcs_signup_signin_221",
+        "warehouse_number": "894",
+        "accept_language": "en-CA,en;q=0.9",
+    },
+}
+
+# Backwards-compatible defaults (US)
+POLICY_NAME = REGION_CONFIG["us"]["policy_name"]
+TOKEN_ENDPOINT = f"https://signin.costco.com/{TENANT_ID}/{POLICY_NAME}/oauth2/v2.0/token"
+WCS_CLIENT_ID = REGION_CONFIG["us"]["wcs_client_id"]
+
+
+def get_region_config(region: str | None = None) -> dict[str, str]:
+    """Return configuration for a Costco region ('us' or 'ca')."""
+    key = (region or os.environ.get("COSTCO_REGION", "us")).strip().lower()
+    if key not in REGION_CONFIG:
+        raise ValueError(f"Unsupported Costco region '{region}'. Supported: {', '.join(REGION_CONFIG)}")
+    return REGION_CONFIG[key]
 
 # Base directory
 BASE_DIR = Path.home() / ".costco-mcp"
@@ -88,7 +114,15 @@ def _is_token_expired(id_token: str, buffer_seconds: int = 120) -> bool:
         return True
 
 
-def _refresh_tokens(refresh_token: str) -> dict:
+def _refresh_tokens(refresh_token: str, region: str = "us") -> dict:
+    cfg = get_region_config(region)
+    token_endpoint = f"https://signin.costco.com/{TENANT_ID}/{cfg['policy_name']}/oauth2/v2.0/token"
+    headers = {
+        **_BROWSER_HEADERS,
+        "Origin": cfg["base_url"],
+        "Referer": f"{cfg['base_url']}/",
+        "Accept-Language": cfg["accept_language"],
+    }
     data = {
         "client_id": MSAL_CLIENT_ID,
         "scope": "openid profile offline_access",
@@ -96,9 +130,9 @@ def _refresh_tokens(refresh_token: str) -> dict:
         "refresh_token": refresh_token,
     }
     resp = curl_requests.post(
-        TOKEN_ENDPOINT,
+        token_endpoint,
         data=data,
-        headers=_BROWSER_HEADERS,
+        headers=headers,
         impersonate=_IMPERSONATE,
         timeout=30,
     )
@@ -167,18 +201,26 @@ class CostcoAuth:
             self._account = account
         self._id_token: str | None = None
         self._refresh_token: str | None = None
+        self._region: str = (os.environ.get("COSTCO_REGION", "us").strip().lower() or "us")
+        get_region_config(self._region)
         self._load_from_disk()
 
     @property
     def account(self) -> str:
         return self._account
 
+    @property
+    def region(self) -> str:
+        return self._region
+
     def _load_from_disk(self) -> None:
         auth = _load_account_auth(self._account)
         if auth:
             self._id_token = auth.get("id_token")
             self._refresh_token = auth.get("refresh_token")
-            logger.info("Loaded auth for account '%s'", self._account)
+            if auth.get("region"):
+                self._region = str(auth["region"]).strip().lower()
+            logger.info("Loaded auth for account '%s' (region=%s)", self._account, self._region)
 
     @property
     def is_authenticated(self) -> bool:
@@ -195,7 +237,7 @@ class CostcoAuth:
             return self._id_token
 
         logger.info("Token expired for '%s', refreshing...", self._account)
-        result = _refresh_tokens(self._refresh_token)
+        result = _refresh_tokens(self._refresh_token, region=self._region)
 
         self._id_token = result["id_token"]
         if "refresh_token" in result:
@@ -204,14 +246,22 @@ class CostcoAuth:
         _save_account_auth(self._account, {
             "id_token": self._id_token,
             "refresh_token": self._refresh_token,
+            "region": self._region,
         })
         logger.info("Tokens refreshed for '%s'", self._account)
         return self._id_token
 
-    def save_refresh_token(self, refresh_token: str) -> None:
+    def save_refresh_token(self, refresh_token: str, region: str | None = None) -> None:
+        if region is not None:
+            normalized = region.strip().lower()
+            get_region_config(normalized)
+            self._region = normalized
         self._refresh_token = refresh_token
         self._id_token = None
-        _save_account_auth(self._account, {"refresh_token": refresh_token})
+        _save_account_auth(self._account, {
+            "refresh_token": refresh_token,
+            "region": self._region,
+        })
 
         # Register account in config
         config = _load_config()
@@ -227,6 +277,7 @@ class CostcoAuth:
     def check_status(self) -> dict:
         info: dict = {
             "account": self._account,
+            "region": self._region,
             "auth_file": str(_account_auth_file(self._account)),
             "has_refresh_token": self.is_authenticated,
         }
