@@ -6,7 +6,7 @@ from typing import Any
 
 from curl_cffi import requests as curl_requests
 
-from costco_mcp_server.auth import CostcoAuth, WCS_CLIENT_ID
+from costco_mcp_server.auth import CostcoAuth, get_region_config
 from costco_mcp_server.product_cache import get_cached_names, store_names
 
 # Must match the TLS fingerprint used in auth.py — Akamai Bot Manager
@@ -195,15 +195,16 @@ class CostcoAPI:
 
     def _headers(self) -> dict[str, str]:
         token = self._auth.get_bearer_token()
+        cfg = get_region_config(self._auth.region)
         return {
             "Content-Type": "application/json-patch+json",
             "Accept": "*/*",
-            "Origin": "https://www.costco.com",
-            "Referer": "https://www.costco.com/",
+            "Origin": cfg["base_url"],
+            "Referer": f"{cfg['base_url']}/",
             "User-Agent": _USER_AGENT,
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Language": cfg["accept_language"],
             "costco-x-authorization": f"Bearer {token}",
-            "costco-x-wcs-clientid": WCS_CLIENT_ID,
+            "costco-x-wcs-clientid": cfg["wcs_client_id"],
             "client-identifier": self.CLIENT_IDENTIFIER,
             "costco.env": "ecom",
             "costco.service": "restOrders",
@@ -282,7 +283,7 @@ class CostcoAPI:
         self,
         start_date: str,
         end_date: str,
-        warehouse_number: str = "847",
+        warehouse_number: str = "",
         page_number: int = 1,
         page_size: int = 25,
     ) -> dict:
@@ -291,14 +292,15 @@ class CostcoAPI:
         Args:
             start_date: Start date as YYYY-M-DD (e.g. "2026-1-01")
             end_date: End date as YYYY-M-DD (e.g. "2026-3-31")
-            warehouse_number: Warehouse number (default "847")
+            warehouse_number: Warehouse number (defaults to region default: "847" US, "894" CA)
             page_number: Page number (default 1)
             page_size: Results per page (default 25)
         """
+        wh = warehouse_number or get_region_config(self._auth.region)["warehouse_number"]
         return self._post(QUERY_ONLINE_ORDERS, {
             "startDate": start_date,
             "endDate": end_date,
-            "warehouseNumber": warehouse_number,
+            "warehouseNumber": wh,
             "pageNumber": page_number,
             "pageSize": page_size,
         })
@@ -306,7 +308,7 @@ class CostcoAPI:
     def lookup_products(
         self,
         item_numbers: list[str],
-        warehouse_number: str = "847",
+        warehouse_number: str = "",
     ) -> dict[str, str]:
         """Look up full product names by Costco item numbers.
 
@@ -315,11 +317,12 @@ class CostcoAPI:
 
         Args:
             item_numbers: List of item numbers (e.g. ["70476", "5887"])
-            warehouse_number: Warehouse number (default "847")
+            warehouse_number: Warehouse number (defaults to region default: "847" US, "894" CA)
 
         Returns:
             Dict mapping item number -> short description
         """
+        warehouse_number = warehouse_number or get_region_config(self._auth.region)["warehouse_number"]
         # Check cache first (skip empty cached values)
         cached = {k: v for k, v in get_cached_names(item_numbers).items() if v}
         uncached = [n for n in item_numbers if n not in cached]
